@@ -1,8 +1,7 @@
 use std::thread;
 use std::sync::mpsc;
 
-use rand::thread_rng;
-use rand::Rng;
+use rand::{thread_rng, Rng};
 
 fn main() {
     // Create MSPC channel
