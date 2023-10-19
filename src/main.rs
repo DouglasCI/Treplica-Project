@@ -39,6 +39,7 @@ fn consumer_handle<T: Debug>(rx: mpsc::Receiver<T>) {
 
     // Time control
     let mut now = Instant::now();
+    let mut elapsed_time: u128;
     const DISK_DELAY: u128 = 5 * u128::pow(10, 6); //5s delay
 
     // Loop to receive and consume data
@@ -62,7 +63,7 @@ fn consumer_handle<T: Debug>(rx: mpsc::Receiver<T>) {
         }
 
         // Is the disk available now? If so, does my buffer has enough elements?
-        let elapsed_time = now.elapsed().as_micros();
+        elapsed_time = now.elapsed().as_micros();
         if elapsed_time >= DISK_DELAY && buffer.len() >= get_buffer_size() {
             flush(&mut buffer, &mut disk);
             now = Instant::now(); //refresh clock
