@@ -78,5 +78,5 @@ fn get_buffer_size() -> usize { 1 }
 fn flush<T: Debug>(buffer: &mut Vec<T>, disk: &mut Vec<T>) {
     println!{">> Flushed {:?} in consumer thread.", &buffer};
     disk.append(buffer);
-    println!{">> Now disk has {:?}", disk};
+    println!{">> Now disk contains {:?}", disk};
 }
