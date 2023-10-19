@@ -11,7 +11,7 @@ fn main() {
     let (tx, rx) = mpsc::channel();
 
     // Start consumer thread
-    thread::spawn(move || { consumer_handle(rx); });
+    thread::spawn(move || { consumer(rx); });
     
     // Loop to generate and send data to consumer
     loop {
@@ -32,7 +32,7 @@ fn generate_data() -> String {
     data
 }
 
-fn consumer_handle<T: Debug>(rx: mpsc::Receiver<T>) {
+fn consumer<T: Debug>(rx: mpsc::Receiver<T>) {
     // Buffer and "fake" disk
     let mut buffer: Vec<T> = vec![];
     let mut disk: Vec<T> = vec![];
