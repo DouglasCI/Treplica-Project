@@ -74,12 +74,12 @@ fn is_disk_ready(now: Instant, buffer_len: usize) -> bool {
     const DISK_DELAY: u128 = 5 * ONE_THOUSAND; //5000ms delay
     const PATIENCE: u128 = DISK_DELAY + ONE_THOUSAND; //+1000ms delay
 
-    // Is the disk available now? 
+    // Firstly, is the disk available now? 
     elapsed_time >= DISK_DELAY && 
-    // If so, does my buffer have enough elements or
-    (buffer_len >= get_buffer_size() ||
-    // is it taking too long to fill and it's not empty?
-    (elapsed_time >= PATIENCE && buffer_len > 0))
+    // If so, is the disk idle for too long and the buffer not empty?
+    ((elapsed_time >= PATIENCE && buffer_len > 0) ||
+    // Or is the buffer full?
+    buffer_len >= get_buffer_size())
 }
 
 // Allows dynamic buffer size
