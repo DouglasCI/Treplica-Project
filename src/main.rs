@@ -39,8 +39,6 @@ fn consumer<T: Debug>(rx: mpsc::Receiver<T>) {
 
     // Time control
     let mut now = Instant::now();
-    let mut elapsed_time: u128;
-    const DISK_DELAY: u128 = 5 * u128::pow(10, 6); //5s delay
 
     // Loop to receive and consume data
     loop {
@@ -62,17 +60,30 @@ fn consumer<T: Debug>(rx: mpsc::Receiver<T>) {
             }
         }
 
-        // Is the disk available now? If so, does my buffer has enough elements?
-        elapsed_time = now.elapsed().as_micros();
-        if elapsed_time >= DISK_DELAY && buffer.len() >= get_buffer_size() {
+        if is_disk_ready(now, buffer.len()) {
             flush(&mut buffer, &mut disk);
             now = Instant::now(); //refresh clock
         }
     }
 }
 
+// Check if it's time to write the buffer to the disk
+fn is_disk_ready(now: Instant, buffer_len: usize) -> bool {
+    let elapsed_time: u128 = now.elapsed().as_millis();
+    const ONE_THOUSAND: u128 = u128::pow(10, 3);
+    const DISK_DELAY: u128 = 5 * ONE_THOUSAND; //5000ms delay
+    const PATIENCE: u128 = DISK_DELAY + ONE_THOUSAND; //+1000ms delay
+
+    // Is the disk available now? 
+    elapsed_time >= DISK_DELAY && 
+    // If so, does my buffer have enough elements or
+    (buffer_len >= get_buffer_size() ||
+    // is it taking too long to fill and it's not empty?
+    (elapsed_time >= PATIENCE && buffer_len > 0))
+}
+
 // Allows dynamic buffer size
-fn get_buffer_size() -> usize { 1 }
+fn get_buffer_size() -> usize { 7 }
 
 // Write buffer to disk
 fn flush<T: Debug>(buffer: &mut Vec<T>, disk: &mut Vec<T>) {
