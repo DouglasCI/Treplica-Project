@@ -18,6 +18,9 @@ fn main() {
         tx.send(generate_data()).unwrap();
         thread::sleep(Duration::from_secs(1)); //1s delay
     }
+
+    // adicionar struct { escrita:T, msg: U }
+    // quebrar buffer (struct) para mandar uma parte pro disco e outra para rede
 }
 
 fn generate_data() -> String {
@@ -68,6 +71,7 @@ fn consumer<T: Debug>(rx: mpsc::Receiver<T>) {
 }
 
 // Check if it's time to write the buffer to the disk
+// overload heuristica disco e rede
 fn is_disk_ready(now: Instant, buffer_len: usize) -> bool {
     let elapsed_time: u128 = now.elapsed().as_millis();
     const ONE_THOUSAND: u128 = u128::pow(10, 3);
@@ -89,5 +93,6 @@ fn get_buffer_size() -> usize { 7 }
 fn flush<T: Debug>(buffer: &mut Vec<T>, disk: &mut Vec<T>) {
     println!{">> Flushed {:?} in consumer thread.", &buffer};
     disk.append(buffer);
+    // quebra
     println!{">> Now disk contains {:?}", disk};
 }
