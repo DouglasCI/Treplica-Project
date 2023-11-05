@@ -15,13 +15,13 @@ struct Data<T, U> {
 }
 
 const ONE_THOUSAND: u128 = u128::pow(10, 3);
-
+// Main
 const PRODUCER_DELAY: u64 = ONE_THOUSAND as u64;
-
+// Disk
 const DISK_DELAY: u128 = 6 * ONE_THOUSAND;
 const PATIENCE: u128 = DISK_DELAY + 5 * ONE_THOUSAND;
 const BUFFER_SIZE: usize = 5;
-
+// Network
 const NETWORK_DELAY: u128 = ONE_THOUSAND;
 const MSGS_PER_INTERVAL: usize = 2;
 
