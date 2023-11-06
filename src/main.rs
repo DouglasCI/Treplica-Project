@@ -25,6 +25,7 @@ const BUFFER_SIZE: usize = 5;
 const NETWORK_DELAY: u128 = ONE_THOUSAND;
 const MSGS_PER_INTERVAL: usize = 2;
 
+// PERGUNTAR COMO FUNCIONA A DISCIPLINA SEMINARIOS DE COMPUTAÇAO
 fn main() {
     /* Create MSPC channels */
     // Producer -> Disk
