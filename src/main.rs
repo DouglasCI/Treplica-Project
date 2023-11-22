@@ -14,6 +14,10 @@ struct Data<T, U> {
     message: U
 }
 
+// ############### escrever no arquivo timestamp absoluto estilo unix
+// ############### escrever em pares de timestamp (latencia 0)"
+// ############### um pro produtor, um pro disco e outro pra rede
+// "pares no formato: {timestamp do produtor} {timestamp do disco/rede}\n"
 const ONE_THOUSAND: u128 = u128::pow(10, 3);
 // Main
 const PRODUCER_DELAY: u64 = ONE_THOUSAND as u64;
@@ -25,7 +29,6 @@ const BUFFER_SIZE: usize = 5;
 const NETWORK_DELAY: u128 = ONE_THOUSAND;
 const MSGS_PER_INTERVAL: usize = 2;
 
-// PERGUNTAR COMO FUNCIONA A DISCIPLINA SEMINARIOS DE COMPUTAÇAO
 fn main() {
     /* Create MSPC channels */
     // Producer -> Disk
@@ -55,6 +58,7 @@ fn producer(counter: u32) -> Data<String, u32> {
     .map(char::from)
     .collect();
 
+    // #################### passar o timestamp da produçao
     let data = Data{ write: w, message: counter };
 
     println!("@[PRODUCER]>> Generated [{:?}].", data);
@@ -104,6 +108,7 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
             
             // Is the buffer full? Or is the disk idle for too long and the buffer is not empty?
             if buffer.len() >= get_buffer_size() || (elapsed_time >= PATIENCE && !buffer.is_empty()) {
+                // ############### usar o buffer interno do rx_disk ao em vez de let buffer
                 (write_buffer, not_ready_msg_buffer) = split_data_buffer(&buffer);
                 flush_to_disk(&mut write_buffer, &mut disk);
                 buffer.clear();
@@ -132,6 +137,7 @@ fn split_data_buffer<T: Clone + Debug, U: Clone + Debug>(buffer: &Vec<Data<T, U>
 
 // Write buffer to disk
 fn flush_to_disk<T: Debug>(write_buffer: &mut Vec<T>, disk: &mut Vec<T>) {
+    // ######################## escrever no arquivo o timestamp que veio do Data e o timestamp de AGORA
     println!{"@[DISK]>> Disk contains {:?}.", disk};
     println!{"@[DISK]>> Disk is now writing {:?}.", &write_buffer};
     disk.append(write_buffer);
@@ -177,6 +183,7 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
 fn get_msgs_per_interval() -> usize { MSGS_PER_INTERVAL }
 
 fn send_to_network<U: Debug>(msg_buffer: &mut Vec<U>, network: &mut Vec<U>) {
+    // ######################## escrever no arquivo o timestamp que veio do Data e o timestamp de AGORA
     println!{"@[NETWORK]>> Sent {:?}.", &msg_buffer};
     network.append(msg_buffer);
     println!{"@[NETWORK]>> Message history {:?}.", network};
