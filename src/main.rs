@@ -3,10 +3,13 @@
 use std::{
     thread, 
     sync::{mpsc, mpsc::TryRecvError::{Empty, Disconnected}}, 
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
     fmt::Debug, 
+    env,
+    fs::File,
+    io::{Write, BufWriter}
 };
-use rand::{thread_rng, Rng, distributions::Alphanumeric};
+// use rand::{thread_rng, Rng, distributions::Alphanumeric};
 
 #[derive(Clone, Debug)]
 struct Data<T, U> {
@@ -14,10 +17,9 @@ struct Data<T, U> {
     message: U
 }
 
-// ############### escrever no arquivo timestamp absoluto estilo unix
-// ############### escrever em pares de timestamp (latencia 0)"
-// ############### um pro produtor, um pro disco e outro pra rede
-// "pares no formato: {timestamp do produtor} {timestamp do disco/rede}\n"
+// Debug mode
+static mut DEBUG_MODE: bool = false;
+
 const ONE_THOUSAND: u128 = u128::pow(10, 3);
 // Main
 const PRODUCER_DELAY: u64 = ONE_THOUSAND as u64;
@@ -30,6 +32,17 @@ const NETWORK_DELAY: u128 = ONE_THOUSAND;
 const MSGS_PER_INTERVAL: usize = 2;
 
 fn main() {
+    /* Run in debug mode or not */
+    let args: Vec<_> = env::args().collect();
+    unsafe {
+        if args.len() > 1 && args[1] == "--debug" { DEBUG_MODE = true }
+        if DEBUG_MODE {
+            println!("Debug mode is: ON");
+        } else {
+            println!("Debug mode is: OFF\n(To activate debug mode use \"cargo run -- --debug\")\n")
+        }
+    }
+
     /* Create MSPC channels */
     // Producer -> Disk
     let (tx_prod, rx_disk) = mpsc::channel();
@@ -43,28 +56,57 @@ fn main() {
     thread::spawn(move || { consumer_network(rx_net); });
     
     // Loop to generate and send data to consumer
-    let mut counter: u32 = 0; //for message field in Data struct
     loop {
-        tx_prod.send(producer(counter)).unwrap();
-        counter += 1;
+        tx_prod.send(producer()).unwrap();
         thread::sleep(Duration::from_millis(PRODUCER_DELAY));
     }
 }
 
-fn producer(counter: u32) -> Data<String, u32> {
-    let w: String = thread_rng()
-    .sample_iter(&Alphanumeric)
-    .take(4)
-    .map(char::from)
-    .collect();
+/* ----------------------------- AUXILIARY FUNCTIONS ----------------------------- */
 
-    // #################### passar o timestamp da produçao
-    let data = Data{ write: w, message: counter };
+// Get elapsed time since 1970-01-01 00:00:00 UTC in milliseconds
+fn get_unix_timestamp() -> u128 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap().as_millis()
+}
 
-    println!("@[PRODUCER]>> Generated [{:?}].", data);
+// Create log file
+fn create_log_file(file_type: &str) -> BufWriter<File> {
+    let file_name = format!("{}_log.txt", file_type);
+    let err_msg = format!("@[CONSUMER] #ERROR: Unable to create {} log file.", file_type);
+    let log_file:File = File::create(file_name)
+                                .expect(err_msg.as_str());
+    BufWriter::new(log_file) //minimizes system calls
+}
+
+// Write to log file
+fn write_to_log_file<U: Debug>(log_file: &mut BufWriter<File>, buffer: &Vec<U>) {
+    let now_timestamp = get_unix_timestamp();
+    for prod_timestamp in buffer {
+        writeln!(log_file, "{:?} {:?}", prod_timestamp, now_timestamp)
+            .expect("@[CONSUMER] #ERROR: Unable to write to log file.");
+    }
+    log_file.flush().unwrap();
+}
+
+/* ----------------------------- PRODUCER RELATED ----------------------------- */
+fn producer() -> Data<u128, u128> {
+    // let w: String = thread_rng()
+    // .sample_iter(&Alphanumeric)
+    // .take(4)
+    // .map(char::from)
+    // .collect();
+
+    let timestamp = get_unix_timestamp();
+    let data = Data{ write: timestamp, message: timestamp };
+
+    unsafe { if DEBUG_MODE { println!("@[PRODUCER]>> Generated [{:?}].", data) } }
+
     data
 }
 
+/* ----------------------------- DISK RELATED ----------------------------- */
 fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
                 (rx_disk: mpsc::Receiver<Data<T, U>>, tx_disk: mpsc::Sender<Vec<U>>) {
     // Structures
@@ -75,6 +117,9 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
     // Time control
     let mut clock = Instant::now();
 
+    // Timestamps log
+    let mut log_file = create_log_file("disk");
+    
     loop {
         // Non-blocking receiver
         match rx_disk.try_recv() {
@@ -87,7 +132,7 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
                 Empty => {},
                 // Channel disconnected!
                 Disconnected => {
-                    println!("#[ERROR]>> Consumer disk thread died!");
+                    println!("@[CONSUMER] #ERROR: Consumer disk thread died!");
                 }
             }
         }
@@ -98,20 +143,22 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
             let mut write_buffer: Vec<T> = vec![];
             let mut ready_msg_buffer: Vec<U> = vec![];
             
-            // Since the disk is avaiable now, the not_ready_msg_buffer is ready
+            // Since the disk is avaiable now, the not_ready_msg_buffer is ready,
             ready_msg_buffer.append(&mut not_ready_msg_buffer);
-
-            // So start sending the ready_msg_buffer through the network
             if !ready_msg_buffer.is_empty() {
+                // so, log the timestamps processed by the disk
+                write_to_log_file(&mut log_file, &ready_msg_buffer);
+
+                // and start sending the ready_msg_buffer through the network
                 tx_disk.send(ready_msg_buffer).unwrap();
             }
             
             // Is the buffer full? Or is the disk idle for too long and the buffer is not empty?
             if buffer.len() >= get_buffer_size() || (elapsed_time >= PATIENCE && !buffer.is_empty()) {
-                // ############### usar o buffer interno do rx_disk ao em vez de let buffer
                 (write_buffer, not_ready_msg_buffer) = split_data_buffer(&buffer);
                 flush_to_disk(&mut write_buffer, &mut disk);
                 buffer.clear();
+
                 clock = Instant::now(); //refresh clock
             }
         }
@@ -137,12 +184,17 @@ fn split_data_buffer<T: Clone + Debug, U: Clone + Debug>(buffer: &Vec<Data<T, U>
 
 // Write buffer to disk
 fn flush_to_disk<T: Debug>(write_buffer: &mut Vec<T>, disk: &mut Vec<T>) {
-    // ######################## escrever no arquivo o timestamp que veio do Data e o timestamp de AGORA
-    println!{"@[DISK]>> Disk contains {:?}.", disk};
-    println!{"@[DISK]>> Disk is now writing {:?}.", &write_buffer};
+    unsafe {
+        if DEBUG_MODE {
+            println!{"@[DISK]>> Disk contains {:?}.", disk};
+            println!{"@[DISK]>> Disk is now writing {:?}.", &write_buffer};
+        }
+    }
+
     disk.append(write_buffer);
 }
 
+/* ----------------------------- NETWORK RELATED ----------------------------- */
 fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
     // Structures
     let mut msg_buffer: Vec<U> = vec![]; //buffer for all messages
@@ -150,6 +202,9 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
 
     // Time control
     let mut clock = Instant::now();
+
+    // Timestamps log
+    let mut log_file = create_log_file("network");
 
     loop {
         // Non-blocking receiver
@@ -163,7 +218,7 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
                 Empty => {},
                 // Channel disconnected!
                 Disconnected => {
-                    println!("#[ERROR]>> Consumer network thread died!");
+                    println!("@[CONSUMER] #ERROR: Consumer network thread died!");
                 }
             }
         }
@@ -173,7 +228,12 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
         let msg_qty = get_msgs_per_interval();
         if elapsed_time >= NETWORK_DELAY && msg_buffer.len() >= msg_qty {
             let mut v = msg_buffer.drain(..msg_qty).collect();
+
+            // Write the timestamps to log file
+            write_to_log_file(&mut log_file, &v);
+
             send_to_network(&mut v, &mut network);
+            
             clock = Instant::now(); //refresh clock
         }
     }
@@ -182,9 +242,11 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
 // Allows dynamic amount of messages sent to network per interval
 fn get_msgs_per_interval() -> usize { MSGS_PER_INTERVAL }
 
+// Send messages through the network
 fn send_to_network<U: Debug>(msg_buffer: &mut Vec<U>, network: &mut Vec<U>) {
-    // ######################## escrever no arquivo o timestamp que veio do Data e o timestamp de AGORA
-    println!{"@[NETWORK]>> Sent {:?}.", &msg_buffer};
+    unsafe { if DEBUG_MODE { println!{"@[NETWORK]>> Sent {:?}.", &msg_buffer} } }
+
     network.append(msg_buffer);
-    println!{"@[NETWORK]>> Message history {:?}.", network};
+
+    unsafe { if DEBUG_MODE { println!{"@[NETWORK]>> Message history {:?}.", network} } }
 }
