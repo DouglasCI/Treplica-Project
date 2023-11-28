@@ -74,9 +74,9 @@ fn get_unix_timestamp() -> u128 {
 // Create log file
 fn create_log_file(file_type: &str) -> BufWriter<File> {
     let file_name = format!("{}_log.txt", file_type);
-    let err_msg = format!("@[CONSUMER] #ERROR: Unable to create {} log file.", file_type);
+    let error_msg = format!("@[CONSUMER] #ERROR: Unable to create {} log file.", file_type);
     let log_file:File = File::create(file_name)
-                                .expect(err_msg.as_str());
+                                .expect(error_msg.as_str());
     BufWriter::new(log_file) //minimizes system calls
 }
 
@@ -112,7 +112,7 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
     // Structures
     let mut buffer: Vec<Data<T, U>> = vec![]; //data buffer
     let mut disk: Vec<T> = vec![]; //false disk
-    let mut not_ready_msg_buffer: Vec<U> = vec![]; //message buffer to be sent to network
+    let mut not_ready_network_buffer: Vec<U> = vec![]; //message buffer to be sent to network
 
     // Time control
     let mut clock = Instant::now();
@@ -140,23 +140,23 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
         let elapsed_time: u128 = clock.elapsed().as_millis();
         // Is the disk available now? 
         if elapsed_time >= DISK_DELAY {
-            let mut write_buffer: Vec<T> = vec![];
-            let mut ready_msg_buffer: Vec<U> = vec![];
+            let mut disk_buffer: Vec<T> = vec![];
+            let mut ready_network_buffer: Vec<U> = vec![];
             
-            // Since the disk is avaiable now, the not_ready_msg_buffer is ready,
-            ready_msg_buffer.append(&mut not_ready_msg_buffer);
-            if !ready_msg_buffer.is_empty() {
+            // Since the disk is avaiable now, the not_ready_network_buffer is ready,
+            ready_network_buffer.append(&mut not_ready_network_buffer);
+            if !ready_network_buffer.is_empty() {
                 // so, log the timestamps processed by the disk
-                write_to_log_file(&mut log_file, &ready_msg_buffer);
+                write_to_log_file(&mut log_file, &ready_network_buffer);
 
-                // and start sending the ready_msg_buffer through the network
-                tx_disk.send(ready_msg_buffer).unwrap();
+                // and start sending the ready_network_buffer through the network
+                tx_disk.send(ready_network_buffer).unwrap();
             }
             
             // Is the buffer full? Or is the disk idle for too long and the buffer is not empty?
             if buffer.len() >= get_buffer_size() || (elapsed_time >= PATIENCE && !buffer.is_empty()) {
-                (write_buffer, not_ready_msg_buffer) = split_data_buffer(&buffer);
-                flush_to_disk(&mut write_buffer, &mut disk);
+                (disk_buffer, not_ready_network_buffer) = split_data_buffer(&buffer);
+                flush_to_disk(&mut disk_buffer, &mut disk);
                 buffer.clear();
 
                 clock = Instant::now(); //refresh clock
@@ -170,16 +170,16 @@ fn get_buffer_size() -> usize { BUFFER_SIZE }
 
 // Split data buffer into write and message buffers
 fn split_data_buffer<T: Clone + Debug, U: Clone + Debug>(buffer: &Vec<Data<T, U>>) -> (Vec<T>, Vec<U>) {
-    let mut write_buffer: Vec<T> = vec![];
-    let mut msg_buffer: Vec<U> = vec![];
+    let mut disk_buffer: Vec<T> = vec![];
+    let mut network_buffer: Vec<U> = vec![];
 
     for d in buffer {
         let dd = d.clone();
-        write_buffer.push(dd.write);
-        msg_buffer.push(dd.message);
+        disk_buffer.push(dd.write);
+        network_buffer.push(dd.message);
     }
 
-    (write_buffer, msg_buffer)
+    (disk_buffer, network_buffer)
 }
 
 // Write buffer to disk
@@ -197,7 +197,7 @@ fn flush_to_disk<T: Debug>(write_buffer: &mut Vec<T>, disk: &mut Vec<T>) {
 /* ----------------------------- NETWORK RELATED ----------------------------- */
 fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
     // Structures
-    let mut msg_buffer: Vec<U> = vec![]; //buffer for all messages
+    let mut network_buffer: Vec<U> = vec![]; //buffer for all messages
     let mut network: Vec<U> = vec![]; //sent messages history
 
     // Time control
@@ -211,7 +211,7 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
         match rx_net.try_recv() {
             Ok(messages) => {
                 // Received data in this iteration!
-                msg_buffer.extend(messages);
+                network_buffer.extend(messages);
             }
             Err(error) => match error {
                 // Did not receive any data in this iteration!
@@ -223,11 +223,11 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
             }
         }
         
-        // Send small slices of the msg_buffer
+        // Send small slices of the network_buffer
         let elapsed_time: u128 = clock.elapsed().as_millis();
         let msg_qty = get_msgs_per_interval();
-        if elapsed_time >= NETWORK_DELAY && msg_buffer.len() >= msg_qty {
-            let mut v = msg_buffer.drain(..msg_qty).collect();
+        if elapsed_time >= NETWORK_DELAY && network_buffer.len() >= msg_qty {
+            let mut v = network_buffer.drain(..msg_qty).collect();
 
             // Write the timestamps to log file
             write_to_log_file(&mut log_file, &v);
@@ -243,10 +243,10 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
 fn get_msgs_per_interval() -> usize { MSGS_PER_INTERVAL }
 
 // Send messages through the network
-fn send_to_network<U: Debug>(msg_buffer: &mut Vec<U>, network: &mut Vec<U>) {
-    unsafe { if DEBUG_MODE { println!{"@[NETWORK]>> Sent {:?}.", &msg_buffer} } }
+fn send_to_network<U: Debug>(network_buffer: &mut Vec<U>, network: &mut Vec<U>) {
+    unsafe { if DEBUG_MODE { println!{"@[NETWORK]>> Sent {:?}.", &network_buffer} } }
 
-    network.append(msg_buffer);
+    network.append(network_buffer);
 
     unsafe { if DEBUG_MODE { println!{"@[NETWORK]>> Message history {:?}.", network} } }
 }
