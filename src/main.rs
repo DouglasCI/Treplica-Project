@@ -26,7 +26,7 @@ const PRODUCER_DELAY: u64 = ONE_THOUSAND as u64;
 // Disk
 const DISK_DELAY: u128 = 5 * ONE_THOUSAND;
 const PATIENCE: u128 = DISK_DELAY + 2 * ONE_THOUSAND;
-const MIN_BUFFER_SIZE: usize = 10;
+const MIN_BUFFER_SIZE: usize = 1;
 // Network
 const NETWORK_DELAY: u128 = ONE_THOUSAND;
 const MSGS_PER_INTERVAL: usize = 3;
@@ -116,6 +116,7 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
     
     // Network buffer send control
     let mut is_past_buffer_ready: bool = true;
+    let mut unstable_msg_qty: usize = 0; 
     let mut stable_msg_qty: usize = 0;
 
     // Time control
@@ -149,7 +150,10 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
             if disk_buffer.len() >= get_min_buffer_size() || (elapsed_time >= PATIENCE && !disk_buffer.is_empty()) {
                 // Signals past buffer is ready to be sent through network.
                 is_past_buffer_ready = !is_past_buffer_ready;
-                stable_msg_qty = disk_buffer.len(); //number of disk-stable messages
+                
+                // Number of disk-stable messages
+                stable_msg_qty = unstable_msg_qty;
+                unstable_msg_qty = disk_buffer.len();
 
                 flush_to_disk(&mut disk_buffer, &mut disk);
 
