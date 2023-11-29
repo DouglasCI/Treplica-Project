@@ -18,6 +18,7 @@ struct Data<T, U> {
 }
 
 // Debug mode
+// ########## ARRUMAR DEBUG
 static mut DEBUG_MODE: bool = false;
 
 const ONE_THOUSAND: u128 = u128::pow(10, 3);
@@ -60,6 +61,8 @@ fn main() {
         tx_prod.send(producer()).unwrap();
         thread::sleep(Duration::from_millis(PRODUCER_DELAY));
     }
+
+    //############ encerrar o programa
 }
 
 /* ----------------------------- AUXILIARY FUNCTIONS ----------------------------- */
@@ -225,6 +228,9 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
         let elapsed_time: u128 = clock.elapsed().as_millis();
         let msg_qty = get_msgs_per_interval();
         if elapsed_time >= NETWORK_DELAY && network_buffer.len() >= msg_qty {
+            //################# FAZER COM QUE A REDE ENTREGUE AS MENSAGENS
+            // EXATAMENTE NO TEMPO DE ESPERA DO DISCO TIPO DISK_DELAY/NUM_ENVIOS_REDE
+            // ISSO IMPLICA NUMEROS QUEBRADOS DE ENVIO
             let mut v = network_buffer.drain(..msg_qty).collect();
 
             // Write the timestamps to log file.
