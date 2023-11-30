@@ -7,7 +7,7 @@ use std::{
     fmt::Debug, 
     env,
     fs::File,
-    io::{Write, BufWriter}
+    io::{Write, BufWriter},
 };
 // use rand::{thread_rng, Rng, distributions::Alphanumeric};
 
@@ -17,32 +17,143 @@ struct Data<T, U> {
     message: U
 }
 
-// Debug mode
-// ########## ARRUMAR DEBUG
-static mut DEBUG_MODE: bool = false;
+enum DataWrapper<T, U> {
+    Data(Data<T, U>),
+    Shutdown,
+}
 
-const ONE_THOUSAND: u128 = u128::pow(10, 3);
-// Main
-const PRODUCER_DELAY: u64 = ONE_THOUSAND as u64;
-// Disk
-const DISK_DELAY: u128 = 5 * ONE_THOUSAND;
-const PATIENCE: u128 = DISK_DELAY + 2 * ONE_THOUSAND;
-const MIN_BUFFER_SIZE: usize = 1;
-// Network
-const NETWORK_DELAY: u128 = ONE_THOUSAND;
-const MSGS_PER_INTERVAL: usize = 3;
+enum MessageWrapper<U> {
+    Message(Vec<U>),
+    Shutdown,
+}
 
-fn main() {
-    /* Run in debug mode or not. */
-    let args: Vec<_> = env::args().collect();
-    unsafe {
-        if args.len() > 1 && args[1] == "--debug" { DEBUG_MODE = true }
-        if DEBUG_MODE {
-            println!("Debug mode is: ON");
-        } else {
-            println!("Debug mode is: OFF\n(To activate debug mode use \"cargo run -- --debug\")\n")
+/* ----------------------------- OPTION PARSING FUNCTIONS ----------------------------- */
+fn args_help() {
+    println!("--help | -h => Show help message.
+--debug | -d => Show debug messages during execution (default = false).
+--producer_delay {{Int}} | -pd {{Int}} => Set producer delay in milliseconds (default = 1000).
+--num_operations {{Int}} | -no {{Int}} => Set size of data to be generated (default = 50).
+--disk_delay {{Int}} | -dd {{Int}} => Set disk delay in seconds (default = 5000).
+--msgs_per_interval {{Int}} | -mpi {{Int}} => Set number of messages sent per network interval (default = 2).");
+}
+
+fn args_error(error_msg: &str) {
+    eprintln!("Error in execution options: {}.", error_msg);
+    args_help();
+}
+
+fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
+    let mut debug_mode: bool = false;
+    let mut producer_delay: u64 = 1000;
+    let mut num_operations: u128 = 50;
+    let mut disk_delay: u128 = 5000;
+    let mut msgs_per_interval: usize = 2;
+
+    let mut i = 1;
+    while i < args.len() {
+        let option = &args[i];
+        match option.as_str() {
+            "--help" | "-h" => {
+                args_help();
+                return None;
+            }
+            "--debug" | "-d" => { debug_mode = true; }
+            "--producer_delay" | "-pd" => {
+                if i + 1 < args.len() {
+                    let val = &args[i + 1];
+                    let num: u64 = match val.parse() {
+                        Ok(n) => { n },
+                        Err(_) => {
+                            args_error("--producer_delay option requires a number");
+                            return None;
+                        },
+                    };
+                    producer_delay = num;
+                    i += 1;
+                } else {
+                    args_error("--producer_delay option requires a number");
+                    return None;
+                }
+            }
+            "--num_operations" | "-no" => {
+                if i + 1 < args.len() {
+                    let val = &args[i + 1];
+                    let num: u128 = match val.parse() {
+                        Ok(n) => { n },
+                        Err(_) => {
+                            args_error("--num_operations option requires a number");
+                            return None;
+                        },
+                    };
+                    num_operations = num;
+                    i += 1;
+                } else {
+                    args_error("--num_operations option requires a number");
+                    return None;
+                }
+            }
+            "--disk_delay" | "-dd" => {
+                if i + 1 < args.len() {
+                    let val = &args[i + 1];
+                    let num: u128 = match val.parse() {
+                        Ok(n) => { n },
+                        Err(_) => {
+                            args_error("--disk_delay option requires a number");
+                            return None;
+                        },
+                    };
+                    disk_delay = num;
+                    i += 1;
+                } else {
+                    args_error("--disk_delay option requires a number");
+                    return None;
+                }
+            }
+            "--msgs_per_interval" | "-mpi" => {
+                if i + 1 < args.len() {
+                    let val = &args[i + 1];
+                    let num: usize = match val.parse() {
+                        Ok(n) => { n },
+                        Err(_) => {
+                            args_error("--msgs_per_interval option requires a number");
+                            return None;
+                        },
+                    };
+                    msgs_per_interval = num;
+                    i += 1;
+                } else {
+                    args_error("--msgs_per_interval option requires a number");
+                    return None;
+                }
+            }
+            _ => {
+                args_error("unknown option");
+                return None;
+            }
         }
+        i += 1;
     }
+
+    Some((debug_mode, producer_delay, num_operations, disk_delay, msgs_per_interval))
+}
+
+/* ----------------------------- MAIN ----------------------------- */
+fn main() {
+    /* Collect all options for this run. */
+    let args: Vec<String> = env::args().collect();
+    let (debug_mode, producer_delay, num_operations, disk_delay, msgs_per_interval) =
+        match parse_args(args) {
+            Some(x) => x,
+            None => { return; },
+        };
+
+    if debug_mode {
+        println!("Debug mode is: ON");
+    } else {
+        println!("Debug mode is: OFF\n(To activate debug mode use \"cargo run -- --debug\")\n")
+    }
+
+    println!("@[MAIN] Program is executing...");
 
     /* Create MSPC channels. */
     // Producer -> Disk
@@ -52,21 +163,24 @@ fn main() {
 
     /* Start consumer threads. */
     // Disk
-    thread::spawn(move || { consumer_disk(rx_disk, tx_disk); });
+    let h1 = thread::spawn(move || { consumer_disk(rx_disk, tx_disk, disk_delay, debug_mode); });
     // Network
-    thread::spawn(move || { consumer_network(rx_net); });
+    let h2 = thread::spawn(move || { consumer_network(rx_net, disk_delay, msgs_per_interval, debug_mode); });
     
     // Loop to generate and send data to consumer.
-    loop {
-        tx_prod.send(producer()).unwrap();
-        thread::sleep(Duration::from_millis(PRODUCER_DELAY));
+    for _ in 0..num_operations {
+        tx_prod.send(producer(debug_mode)).unwrap();
+        thread::sleep(Duration::from_millis(producer_delay));
     }
 
-    //############ encerrar o programa
+    // Tell threads to finish their work.
+    tx_prod.send(DataWrapper::Shutdown).unwrap();
+
+    h1.join().unwrap();
+    h2.join().unwrap();
 }
 
 /* ----------------------------- AUXILIARY FUNCTIONS ----------------------------- */
-
 // Get elapsed time since 1970-01-01 00:00:00 UTC in milliseconds.
 fn get_unix_timestamp() -> u128 {
     SystemTime::now()
@@ -74,7 +188,6 @@ fn get_unix_timestamp() -> u128 {
         .unwrap().as_millis()
 }
 
-// Create log file.
 fn create_log_file(file_type: &str) -> BufWriter<File> {
     let file_name = format!("{}_log.txt", file_type);
     let error_msg = format!("@[CONSUMER] #ERROR: Unable to create {} log file.", file_type);
@@ -83,18 +196,16 @@ fn create_log_file(file_type: &str) -> BufWriter<File> {
     BufWriter::new(log_file) //minimizes system calls
 }
 
-// Write to log file.
 fn write_to_log_file<U: Debug>(log_file: &mut BufWriter<File>, buffer: &Vec<U>) {
     let now_timestamp = get_unix_timestamp();
     for prod_timestamp in buffer {
         writeln!(log_file, "{:?} {:?}", prod_timestamp, now_timestamp)
             .expect("@[CONSUMER] #ERROR: Unable to write to log file.");
     }
-    log_file.flush().unwrap();
 }
 
 /* ----------------------------- PRODUCER RELATED ----------------------------- */
-fn producer() -> Data<u128, u128> {
+fn producer(debug_mode: bool) -> DataWrapper<u128, u128> {
     // let w: String = thread_rng()
     // .sample_iter(&Alphanumeric)
     // .take(4)
@@ -104,105 +215,110 @@ fn producer() -> Data<u128, u128> {
     let timestamp = get_unix_timestamp();
     let data = Data{ write: timestamp, message: timestamp };
 
-    unsafe { if DEBUG_MODE { println!("@[PRODUCER]>> Generated [{:?}].", data) } }
+    if debug_mode { println!("@[PRODUCER]>> Generated [{:?}].", data) }
 
-    data
+    DataWrapper::Data(data)
 }
 
 /* ----------------------------- DISK RELATED ----------------------------- */
 fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
-                (rx_disk: mpsc::Receiver<Data<T, U>>, tx_disk: mpsc::Sender<Vec<U>>) {
+        (rx_disk: mpsc::Receiver<DataWrapper<T, U>>, 
+        tx_disk: mpsc::Sender<MessageWrapper<U>>, 
+        disk_delay: u128, debug_mode: bool) {
     // Structures
     let mut disk: Vec<T> = vec![]; //false disk
     let mut disk_buffer: Vec<T> = vec![]; //disk buffer
     let mut network_buffer: Vec<U> = vec![]; //message buffer to be sent to network
     
     // Network buffer send control
-    let mut is_past_buffer_ready: bool = true;
     let mut unstable_msg_qty: usize = 0; 
     let mut stable_msg_qty: usize = 0;
 
-    // Time control
+    // Control
     let mut clock = Instant::now();
+    let mut shutdown = false;
 
     // Timestamps log
     let mut log_file = create_log_file("disk");
-    
+
     loop {
         // Non-blocking receiver
         match rx_disk.try_recv() {
-            Ok(data) => {
-                // Received data in this iteration!
-                disk_buffer.push(data.write);
-                network_buffer.push(data.message);
+            // Received data in this iteration!
+            Ok(data) => match data {
+                DataWrapper::Data(dd) => {
+                    disk_buffer.push(dd.write);
+                    network_buffer.push(dd.message);
+                },
+                DataWrapper::Shutdown => { shutdown = true; }
             }
             Err(error) => match error {
                 // Did not receive any data in this iteration!
                 Empty => {},
                 // Channel disconnected!
                 Disconnected => {
-                    println!("@[CONSUMER] #ERROR: Consumer disk thread died!");
+                    if !shutdown {
+                        println!("@[CONSUMER] #ERROR: Producer thread died!");
+                    }
                 }
             }
         }
 
         let elapsed_time: u128 = clock.elapsed().as_millis();
         // Is the disk available now? 
-        if elapsed_time >= DISK_DELAY {
-            // Is the buffer full? Or is the disk idle for too long and the buffer is not empty?
-            if disk_buffer.len() >= get_min_buffer_size() || (elapsed_time >= PATIENCE && !disk_buffer.is_empty()) {
-                // Signals past buffer is ready to be sent through network.
-                is_past_buffer_ready = !is_past_buffer_ready;
-                
-                // Number of disk-stable messages
-                stable_msg_qty = unstable_msg_qty;
-                unstable_msg_qty = disk_buffer.len();
+        if elapsed_time >= disk_delay {
+            // Number of disk-stable messages
+            stable_msg_qty = unstable_msg_qty;
+            unstable_msg_qty = disk_buffer.len();
 
-                flush_to_disk(&mut disk_buffer, &mut disk);
+            flush_to_disk(&mut disk_buffer, &mut disk, debug_mode);
 
-                clock = Instant::now(); //refresh clock
-            }
+            clock = Instant::now(); //refresh clock
 
-            // Since the disk is avaiable now, the past buffer is stable on the disk,
-            if is_past_buffer_ready && stable_msg_qty > (0 as usize) {
-                // so get the slice of the network_buffer that contains those stable messages,
+            // If we have disk-stable messages,
+            if stable_msg_qty > (0 as usize) {
+                // get the slice of the network_buffer that contains those stable messages,
                 let to_be_sent_buffer: Vec<U> = network_buffer.drain(..stable_msg_qty).collect();
-                // log the timestamps
+                // log the timestamps,
                 write_to_log_file(&mut log_file, &to_be_sent_buffer);
                 // and start sending the past buffer through the network.
-                tx_disk.send(to_be_sent_buffer).unwrap();
+                tx_disk.send(MessageWrapper::Message(to_be_sent_buffer)).unwrap();
 
-                // This buffer is done.
-                is_past_buffer_ready = !is_past_buffer_ready;
+                // The stable buffer is done.
                 stable_msg_qty = 0;
+            }
+
+            if shutdown && unstable_msg_qty == 0 {
+                tx_disk.send(MessageWrapper::Shutdown).unwrap();
+                println!("@[CONSUMER] #SHUTDOWN: Finished work in disk thread.");
+                break;
             }
         }
     }
 }
 
-// Allows dynamic buffer size.
-fn get_min_buffer_size() -> usize { MIN_BUFFER_SIZE }
-
 // Write buffer to disk.
-fn flush_to_disk<T: Debug>(disk_buffer: &mut Vec<T>, disk: &mut Vec<T>) {
-    unsafe {
-        if DEBUG_MODE {
-            println!{"@[DISK]>> Disk contains {:?}.", disk};
-            println!{"@[DISK]>> Disk is now writing {:?}.", &disk_buffer};
-        }
+fn flush_to_disk<T: Debug>(disk_buffer: &mut Vec<T>, disk: &mut Vec<T>, debug_mode: bool) {
+    if debug_mode {
+        println!{"@[DISK]>> Disk contains {:?}.", disk};
+        println!{"@[DISK]>> Disk is now writing {:?}.", &disk_buffer};
     }
 
     disk.append(disk_buffer);
 }
 
 /* ----------------------------- NETWORK RELATED ----------------------------- */
-fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
+fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<MessageWrapper<U>>, 
+        disk_delay: u128, msgs_per_interval: usize, debug_mode: bool) {
     // Structures
     let mut network_buffer: Vec<U> = vec![]; //buffer for all messages
     let mut network: Vec<U> = vec![]; //sent messages history
 
-    // Time control
+    // Control
     let mut clock = Instant::now();
+    let mut send_interval: u128 = 0;
+    let mut num_sends: u128 = 0;
+    let mut shutdown = false;
 
     // Timestamps log
     let mut log_file = create_log_file("network");
@@ -210,47 +326,60 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Vec<U>>) {
     loop {
         // Non-blocking receiver
         match rx_net.try_recv() {
-            Ok(messages) => {
-                // Received data in this iteration!
-                network_buffer.extend(messages);
+            // Received data in this iteration!
+            Ok(messages) => match messages {
+                MessageWrapper::Message(mm) => {
+                    network_buffer.extend(mm);
+                },
+                MessageWrapper::Shutdown => { shutdown = true; }
             }
             Err(error) => match error {
                 // Did not receive any data in this iteration!
                 Empty => {},
                 // Channel disconnected!
                 Disconnected => {
-                    println!("@[CONSUMER] #ERROR: Consumer network thread died!");
+                    if !shutdown {
+                        println!("@[CONSUMER] #ERROR: Consumer disk thread died!");
+                    }
                 }
             }
         }
+
+        if shutdown && network_buffer.is_empty() {
+            println!("@[CONSUMER] #SHUTDOWN: Finished work in network thread.");
+            break;
+        }
         
         // Send small slices of the network_buffer.
-        let elapsed_time: u128 = clock.elapsed().as_millis();
-        let msg_qty = get_msgs_per_interval();
-        if elapsed_time >= NETWORK_DELAY && network_buffer.len() >= msg_qty {
-            //################# FAZER COM QUE A REDE ENTREGUE AS MENSAGENS
-            // EXATAMENTE NO TEMPO DE ESPERA DO DISCO TIPO DISK_DELAY/NUM_ENVIOS_REDE
-            // ISSO IMPLICA NUMEROS QUEBRADOS DE ENVIO
-            let mut v = network_buffer.drain(..msg_qty).collect();
+        let buffer_size = network_buffer.len();
+        if buffer_size > (0 as usize) {
+            let elapsed_time: u128 = clock.elapsed().as_millis();
+            if elapsed_time >= send_interval {
+                // Only recalculate when the entire buffer is sent
+                if num_sends == 0 {
+                    num_sends = ((buffer_size + (msgs_per_interval - 1)) / msgs_per_interval) as u128;
+                    send_interval = disk_delay / num_sends;
+                }
+                
+                let drain_range = std::cmp::min(msgs_per_interval, buffer_size);
+                let mut v = network_buffer.drain(..drain_range).collect();
 
-            // Write the timestamps to log file.
-            write_to_log_file(&mut log_file, &v);
+                write_to_log_file(&mut log_file, &v);
 
-            send_to_network(&mut v, &mut network);
-            
-            clock = Instant::now(); //refresh clock
+                send_to_network(&mut v, &mut network, debug_mode);
+                
+                num_sends -= 1; //decrement number of sends left for this buffer
+                clock = Instant::now(); //refresh clock
+            }
         }
     }
 }
 
-// Allows dynamic amount of messages sent to network per interval.
-fn get_msgs_per_interval() -> usize { MSGS_PER_INTERVAL }
-
-// Send messages through the network.
-fn send_to_network<U: Debug>(network_buffer: &mut Vec<U>, network: &mut Vec<U>) {
-    unsafe { if DEBUG_MODE { println!{"@[NETWORK]>> Sent {:?}.", &network_buffer} } }
+// Send messages to the network layer.
+fn send_to_network<U: Debug>(network_buffer: &mut Vec<U>, network: &mut Vec<U>, debug_mode: bool) {
+    if debug_mode { println!{"@[NETWORK]>> Sent {:?}.", &network_buffer} }
 
     network.append(network_buffer);
 
-    unsafe { if DEBUG_MODE { println!{"@[NETWORK]>> Message history {:?}.", network} } }
+    if debug_mode { println!{"@[NETWORK]>> Message history {:?}.", network} }
 }
