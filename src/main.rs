@@ -50,7 +50,8 @@ fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
     let mut msgs_per_interval: usize = 2;
 
     let mut i = 1;
-    while i < args.len() {
+    let len = args.len();
+    while i < len {
         let option = &args[i];
         match option.as_str() {
             "--help" | "-h" => {
@@ -59,16 +60,15 @@ fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
             }
             "--debug" | "-d" => { debug_mode = true; }
             "--producer_delay" | "-pd" => {
-                if i + 1 < args.len() {
+                if i + 1 < len {
                     let val = &args[i + 1];
-                    let num: u64 = match val.parse() {
+                    producer_delay = match val.parse() {
                         Ok(n) => { n },
                         Err(_) => {
                             args_error("--producer_delay option requires a number");
                             return None;
                         },
                     };
-                    producer_delay = num;
                     i += 1;
                 } else {
                     args_error("--producer_delay option requires a number");
@@ -76,16 +76,15 @@ fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
                 }
             }
             "--num_operations" | "-no" => {
-                if i + 1 < args.len() {
+                if i + 1 < len {
                     let val = &args[i + 1];
-                    let num: u128 = match val.parse() {
+                    num_operations = match val.parse() {
                         Ok(n) => { n },
                         Err(_) => {
                             args_error("--num_operations option requires a number");
                             return None;
                         },
                     };
-                    num_operations = num;
                     i += 1;
                 } else {
                     args_error("--num_operations option requires a number");
@@ -93,16 +92,15 @@ fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
                 }
             }
             "--disk_delay" | "-dd" => {
-                if i + 1 < args.len() {
+                if i + 1 < len {
                     let val = &args[i + 1];
-                    let num: u128 = match val.parse() {
+                    disk_delay = match val.parse() {
                         Ok(n) => { n },
                         Err(_) => {
                             args_error("--disk_delay option requires a number");
                             return None;
                         },
                     };
-                    disk_delay = num;
                     i += 1;
                 } else {
                     args_error("--disk_delay option requires a number");
@@ -110,16 +108,15 @@ fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
                 }
             }
             "--msgs_per_interval" | "-mpi" => {
-                if i + 1 < args.len() {
+                if i + 1 < len {
                     let val = &args[i + 1];
-                    let num: usize = match val.parse() {
+                    msgs_per_interval = match val.parse() {
                         Ok(n) => { n },
                         Err(_) => {
                             args_error("--msgs_per_interval option requires a number");
                             return None;
                         },
                     };
-                    msgs_per_interval = num;
                     i += 1;
                 } else {
                     args_error("--msgs_per_interval option requires a number");
@@ -279,8 +276,10 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
             if stable_msg_qty > (0 as usize) {
                 // get the slice of the network_buffer that contains those stable messages,
                 let to_be_sent_buffer: Vec<U> = network_buffer.drain(..stable_msg_qty).collect();
+                
                 // log the timestamps,
                 write_to_log_file(&mut log_file, &to_be_sent_buffer);
+                
                 // and start sending the past buffer through the network.
                 tx_disk.send(MessageWrapper::Message(to_be_sent_buffer)).unwrap();
 
