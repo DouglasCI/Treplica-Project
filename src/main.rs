@@ -17,16 +17,6 @@ struct Data<T, U> {
     message: U
 }
 
-enum DataWrapper<T, U> {
-    Data(Data<T, U>),
-    Shutdown,
-}
-
-enum MessageWrapper<U> {
-    Message(Vec<U>),
-    Shutdown,
-}
-
 /* ----------------------------- OPTION PARSING FUNCTIONS ----------------------------- */
 fn args_help() {
     println!("--help | -h => Show help message.
@@ -164,14 +154,14 @@ fn main() {
     // Network
     let h2 = thread::spawn(move || { consumer_network(rx_net, disk_delay, msgs_per_interval, debug_mode); });
     
-    // Loop to generate and send data to consumer.
+    /* Loop to generate and send data to consumer. */
     for _ in 0..num_operations {
         tx_prod.send(producer(debug_mode)).unwrap();
         thread::sleep(Duration::from_millis(producer_delay));
     }
 
-    // Tell threads to finish their work.
-    tx_prod.send(DataWrapper::Shutdown).unwrap();
+    /* Tell threads to finish their work. */
+    tx_prod.send(None).unwrap();
 
     h1.join().unwrap();
     h2.join().unwrap();
@@ -202,7 +192,7 @@ fn write_to_log_file<U: Debug>(log_file: &mut BufWriter<File>, buffer: &Vec<U>) 
 }
 
 /* ----------------------------- PRODUCER RELATED ----------------------------- */
-fn producer(debug_mode: bool) -> DataWrapper<u128, u128> {
+fn producer(debug_mode: bool) -> Option<Data<u128, u128>> {
     // let w: String = thread_rng()
     // .sample_iter(&Alphanumeric)
     // .take(4)
@@ -214,13 +204,13 @@ fn producer(debug_mode: bool) -> DataWrapper<u128, u128> {
 
     if debug_mode { println!("@[PRODUCER]>> Generated [{:?}].", data) }
 
-    DataWrapper::Data(data)
+    Some(data)
 }
 
 /* ----------------------------- DISK RELATED ----------------------------- */
 fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
-        (rx_disk: mpsc::Receiver<DataWrapper<T, U>>, 
-        tx_disk: mpsc::Sender<MessageWrapper<U>>, 
+        (rx_disk: mpsc::Receiver<Option<Data<T, U>>>, 
+        tx_disk: mpsc::Sender<Option<Vec<U>>>, 
         disk_delay: u128, debug_mode: bool) {
     // Structures
     let mut disk: Vec<T> = vec![]; //false disk
@@ -243,11 +233,11 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
         match rx_disk.try_recv() {
             // Received data in this iteration!
             Ok(data) => match data {
-                DataWrapper::Data(dd) => {
-                    disk_buffer.push(dd.write);
-                    network_buffer.push(dd.message);
+                Some(d) => {
+                    disk_buffer.push(d.write);
+                    network_buffer.push(d.message);
                 },
-                DataWrapper::Shutdown => { shutdown = true; }
+                None => { shutdown = true; }
             }
             Err(error) => match error {
                 // Did not receive any data in this iteration!
@@ -281,14 +271,14 @@ fn consumer_disk<T: Clone + Debug, U: Clone + Debug>
                 write_to_log_file(&mut log_file, &to_be_sent_buffer);
                 
                 // and start sending the past buffer through the network.
-                tx_disk.send(MessageWrapper::Message(to_be_sent_buffer)).unwrap();
+                tx_disk.send(Some(to_be_sent_buffer)).unwrap();
 
                 // The stable buffer is done.
                 stable_msg_qty = 0;
             }
 
             if shutdown && unstable_msg_qty == 0 {
-                tx_disk.send(MessageWrapper::Shutdown).unwrap();
+                tx_disk.send(None).unwrap();
                 println!("@[CONSUMER] #SHUTDOWN: Finished work in disk thread.");
                 break;
             }
@@ -307,7 +297,7 @@ fn flush_to_disk<T: Debug>(disk_buffer: &mut Vec<T>, disk: &mut Vec<T>, debug_mo
 }
 
 /* ----------------------------- NETWORK RELATED ----------------------------- */
-fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<MessageWrapper<U>>, 
+fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Option<Vec<U>>>, 
         disk_delay: u128, msgs_per_interval: usize, debug_mode: bool) {
     // Structures
     let mut network_buffer: Vec<U> = vec![]; //buffer for all messages
@@ -327,10 +317,8 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<MessageWrapper<U>>,
         match rx_net.try_recv() {
             // Received data in this iteration!
             Ok(messages) => match messages {
-                MessageWrapper::Message(mm) => {
-                    network_buffer.extend(mm);
-                },
-                MessageWrapper::Shutdown => { shutdown = true; }
+                Some(m) => { network_buffer.extend(m); },
+                None => { shutdown = true; }
             }
             Err(error) => match error {
                 // Did not receive any data in this iteration!
