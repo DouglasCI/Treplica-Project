@@ -1,15 +1,14 @@
 #![allow(dead_code, unused_assignments)] 
 
 use std::{
-    thread, 
-    sync::{mpsc, mpsc::TryRecvError::{Empty, Disconnected}}, 
-    time::{Duration, Instant, SystemTime},
+    collections::VecDeque, 
+    env, 
     fmt::Debug, 
-    env,
-    fs::File,
-    io::{Write, BufWriter},
+    fs::File, 
+    io::{BufWriter, Write}, 
+    sync::mpsc::{self, TryRecvError::{Disconnected, Empty}}, 
+    thread, time::{Duration, Instant, SystemTime}
 };
-// use rand::{thread_rng, Rng, distributions::Alphanumeric};
 
 #[derive(Clone, Debug)]
 struct Data<T, U> {
@@ -17,27 +16,34 @@ struct Data<T, U> {
     message: U
 }
 
+const ONE_THOUSAND: u128 = 1000;
+const ONE_MILLION: u128 = 1000000;
+
 /* ----------------------------- OPTION PARSING FUNCTIONS ----------------------------- */
 fn args_help() {
     println!("--help | -h => Show help message.
 --debug | -d => Show debug messages during execution (default = false).
---producer_delay {{Int}} | -pd {{Int}} => Set producer delay in milliseconds (default = 1000).
---num_operations {{Int}} | -no {{Int}} => Set size of data to be generated (default = 50).
---disk_delay {{Int}} | -dd {{Int}} => Set disk delay in seconds (default = 5000).
---msgs_per_interval {{Int}} | -mpi {{Int}} => Set number of messages sent per network interval (default = 2).");
+Necessary (use ONLY ONE option):
+--runtime {{Int}} | -r {{Int}} => Set runtime in seconds for this execution.
+--num_writes {{Int}} | -n {{Int}} => Set number of writes the disk will perform in this execution.
+Optional:
+--buffer_size {{Int}} | -bs {{Int}} => Set buffer size to be written (default = 4096).
+--disk_delay {{Int}} | -dd {{Int}} => Set disk delay in milliseconds (default = 20).
+--msgs_per_interval {{Int}} | -mpi {{Int}} => Set number of messages sent per network interval (default = 1).");
 }
 
 fn args_error(error_msg: &str) {
-    eprintln!("Error in execution options: {}.", error_msg);
+    eprintln!("\x1b[93mError in options: {}.\x1b[0m", error_msg);
     args_help();
 }
 
-fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
+fn parse_args(args: Vec<String>) -> Option<(bool, u128, u128, u128, u128, usize)> {
     let mut debug_mode: bool = false;
-    let mut producer_delay: u64 = 1000;
-    let mut num_operations: u128 = 50;
-    let mut disk_delay: u128 = 5000;
-    let mut msgs_per_interval: usize = 2;
+    let mut runtime: u128 = 0;
+    let mut num_writes: u128 = 0;
+    let mut buffer_size: u128 = 4096;
+    let mut disk_delay: u128 = 20;
+    let mut msgs_per_interval: usize = 1;
 
     let mut i = 1;
     let len = args.len();
@@ -49,35 +55,51 @@ fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
                 return None;
             }
             "--debug" | "-d" => { debug_mode = true; }
-            "--producer_delay" | "-pd" => {
+            "--runtime" | "-r" => {
                 if i + 1 < len {
                     let val = &args[i + 1];
-                    producer_delay = match val.parse() {
+                    runtime = match val.parse() {
                         Ok(n) => { n },
                         Err(_) => {
-                            args_error("--producer_delay option requires a number");
+                            args_error("--runtime option requires a number");
                             return None;
                         },
                     };
                     i += 1;
                 } else {
-                    args_error("--producer_delay option requires a number");
+                    args_error("--runtime option requires a number");
                     return None;
                 }
             }
-            "--num_operations" | "-no" => {
+            "--num_writes" | "-n" => {
                 if i + 1 < len {
                     let val = &args[i + 1];
-                    num_operations = match val.parse() {
+                    num_writes = match val.parse() {
                         Ok(n) => { n },
                         Err(_) => {
-                            args_error("--num_operations option requires a number");
+                            args_error("--num_writes option requires a number");
                             return None;
                         },
                     };
                     i += 1;
                 } else {
-                    args_error("--num_operations option requires a number");
+                    args_error("--num_writes option requires a number");
+                    return None;
+                }
+            }
+            "--buffer_size" | "-bs" => {
+                if i + 1 < len {
+                    let val = &args[i + 1];
+                    buffer_size = match val.parse() {
+                        Ok(n) => { n },
+                        Err(_) => {
+                            args_error("--buffer_size option requires a number");
+                            return None;
+                        },
+                    };
+                    i += 1;
+                } else {
+                    args_error("--buffer_size option requires a number");
                     return None;
                 }
             }
@@ -121,26 +143,44 @@ fn parse_args(args: Vec<String>) -> Option<(bool, u64, u128, u128, usize)> {
         i += 1;
     }
 
-    Some((debug_mode, producer_delay, num_operations, disk_delay, msgs_per_interval))
+    Some((debug_mode, runtime, num_writes, buffer_size, disk_delay, msgs_per_interval))
 }
 
 /* ----------------------------- MAIN ----------------------------- */
 fn main() {
     /* Collect all options for this run. */
+    env::set_var("RUST_BACKTRACE", "full");
     let args: Vec<String> = env::args().collect();
-    let (debug_mode, producer_delay, num_operations, disk_delay, msgs_per_interval) =
+    let (debug_mode, runtime, mut num_writes,  
+        buffer_size, disk_delay, msgs_per_interval) =
         match parse_args(args) {
             Some(x) => x,
             None => { return; },
         };
-
-    if debug_mode {
-        println!("Debug mode is: ON");
-    } else {
-        println!("Debug mode is: OFF\n(To activate debug mode use \"cargo run -- --debug\")\n")
+    
+    if runtime == 0 && num_writes == 0 {
+        args_error("runtime or num_writes option is required");
+        return;
     }
 
+    if runtime != 0 && num_writes != 0 {
+        args_error("both runtime and num_writes options were set, only one is required");
+        return;
+    }
+
+    if runtime != 0 {
+        num_writes = runtime * ONE_THOUSAND / disk_delay;
+    }
+
+    if debug_mode {
+        println!("Debug mode is ON.");
+    } else {
+        println!("Debug mode is OFF\n(To activate debug mode use the \"--debug\" option.)\n")
+    }
+
+    
     println!("@[MAIN] Program is executing...");
+    let clock = Instant::now();
 
     /* Create MSPC channels. */
     // Producer -> Disk
@@ -150,21 +190,31 @@ fn main() {
 
     /* Start consumer threads. */
     // Disk
-    let h1 = thread::spawn(move || { consumer_disk(rx_disk, tx_disk, disk_delay, debug_mode); });
+    let h1 = thread::spawn(move || { 
+        consumer_disk(rx_disk, tx_disk, disk_delay, debug_mode); 
+    });
     // Network
-    let h2 = thread::spawn(move || { consumer_network(rx_net, disk_delay, msgs_per_interval, debug_mode); });
+    let h2 = thread::spawn(move || { 
+        consumer_network(rx_net, disk_delay, msgs_per_interval, debug_mode); 
+    });
     
     /* Loop to generate and send data to consumer. */
-    for _ in 0..num_operations {
-        tx_prod.send(producer(debug_mode)).unwrap();
-        thread::sleep(Duration::from_millis(producer_delay));
+    for _ in 0..num_writes {
+        let prod_clock = Instant::now();
+        for _ in 0..buffer_size {
+            tx_prod.send(producer(debug_mode)).unwrap();
+        }
+        let wait_time = (disk_delay * ONE_MILLION).saturating_sub(prod_clock.elapsed().as_nanos());
+        thread::sleep(Duration::from_nanos(wait_time as u64));
     }
 
     /* Tell threads to finish their work. */
     tx_prod.send(None).unwrap();
 
     h1.join().unwrap();
+    println!("> Disk runtime was {}ms.", clock.elapsed().as_millis());
     h2.join().unwrap();
+    println!("> Network runtime was {}ms.", clock.elapsed().as_millis());
 }
 
 /* ----------------------------- AUXILIARY FUNCTIONS ----------------------------- */
@@ -193,12 +243,6 @@ fn write_to_log_file<U: Debug>(log_file: &mut BufWriter<File>, buffer: &Vec<U>) 
 
 /* ----------------------------- PRODUCER RELATED ----------------------------- */
 fn producer(debug_mode: bool) -> Option<Data<u128, u128>> {
-    // let w: String = thread_rng()
-    // .sample_iter(&Alphanumeric)
-    // .take(4)
-    // .map(char::from)
-    // .collect();
-
     let timestamp = get_unix_timestamp();
     let data = Data{ write: timestamp, message: timestamp };
 
@@ -292,7 +336,6 @@ fn flush_to_disk<T: Debug>(disk_buffer: &mut Vec<T>, disk: &mut Vec<T>, debug_mo
         println!{"@[DISK]>> Disk contains {:?}.", disk};
         println!{"@[DISK]>> Disk is now writing {:?}.", &disk_buffer};
     }
-
     disk.append(disk_buffer);
 }
 
@@ -300,8 +343,9 @@ fn flush_to_disk<T: Debug>(disk_buffer: &mut Vec<T>, disk: &mut Vec<T>, debug_mo
 fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Option<Vec<U>>>, 
         disk_delay: u128, msgs_per_interval: usize, debug_mode: bool) {
     // Structures
-    let mut network_buffer: Vec<U> = vec![]; //buffer for all messages
-    let mut network: Vec<U> = vec![]; //sent messages history
+    let mut network_buffers: VecDeque<Vec<U>> = VecDeque::new(); //queue for all message buffers
+    let mut buffer_to_be_sent: Vec<U> = vec![]; //buffer that will be sent in slices
+    let mut network_history: Vec<U> = vec![]; //sent messages history
 
     // Control
     let mut clock = Instant::now();
@@ -317,7 +361,7 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Option<Vec<U>>>,
         match rx_net.try_recv() {
             // Received data in this iteration!
             Ok(messages) => match messages {
-                Some(m) => { network_buffer.extend(m); },
+                Some(m) => { network_buffers.push_back(m); },
                 None => { shutdown = true; }
             }
             Err(error) => match error {
@@ -326,38 +370,59 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Option<Vec<U>>>,
                 // Channel disconnected!
                 Disconnected => {
                     if !shutdown {
-                        println!("@[CONSUMER] #ERROR: Consumer disk thread died!");
+                        println!("@[CONSUMER] #ERROR: Consumer network thread died!");
                     }
                 }
             }
         }
 
-        if shutdown && network_buffer.is_empty() {
+        if shutdown && network_buffers.is_empty() && buffer_to_be_sent.is_empty() {
             println!("@[CONSUMER] #SHUTDOWN: Finished work in network thread.");
             break;
         }
         
-        // Send small slices of the network_buffer.
-        let buffer_size = network_buffer.len();
-        if buffer_size > (0 as usize) {
-            let elapsed_time: u128 = clock.elapsed().as_millis();
-            if elapsed_time >= send_interval {
-                // Only recalculate when the entire buffer is sent
-                if num_sends == 0 {
-                    num_sends = ((buffer_size + (msgs_per_interval - 1)) / msgs_per_interval) as u128;
-                    send_interval = disk_delay / num_sends;
+        // match network_buffers.pop_front() {
+        //     Some(b) => {
+        //         buffer_to_be_sent = b;
+        //     },
+        //     None => { continue; }
+        // }
+        // send_to_network(&mut buffer_to_be_sent, &mut network_history, debug_mode);
+        
+        // Send slices of the buffers.
+        let elapsed_time: u128 = clock.elapsed().as_nanos();
+        if elapsed_time >= send_interval {
+            let mut buffer_size = buffer_to_be_sent.len();
+            // Start sending the next buffer.
+            if num_sends == 0 {
+                match network_buffers.pop_front() {
+                    Some(b) => {
+                        buffer_to_be_sent = b;
+                    },
+                    None => { continue; }
                 }
-                
-                let drain_range = std::cmp::min(msgs_per_interval, buffer_size);
-                let mut v = network_buffer.drain(..drain_range).collect();
+                buffer_size = buffer_to_be_sent.len();
+                num_sends = ((buffer_size + (msgs_per_interval - 1)) / msgs_per_interval) as u128;
+                send_interval = ((disk_delay / 2) * ONE_MILLION) / num_sends as u128;
+            }
+            
+            if buffer_size > 0 {
+                // There might be N messages left in the buffer, where N < msgs_per_interval.
+                let split_index = std::cmp::min(msgs_per_interval, buffer_size);
+                let mut v = buffer_to_be_sent.split_off(split_index);
+                // Reference swap to retain pointers in the right variables.
+                let temp = buffer_to_be_sent;
+                buffer_to_be_sent = v;
+                v = temp;
 
                 write_to_log_file(&mut log_file, &v);
 
-                send_to_network(&mut v, &mut network, debug_mode);
-                
+                send_to_network(&mut v, &mut network_history, debug_mode);
+            
                 num_sends -= 1; //decrement number of sends left for this buffer
-                clock = Instant::now(); //refresh clock
             }
+
+            clock = Instant::now(); //refresh clock
         }
     }
 }
@@ -365,8 +430,6 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Option<Vec<U>>>,
 // Send messages to the network layer.
 fn send_to_network<U: Debug>(network_buffer: &mut Vec<U>, network: &mut Vec<U>, debug_mode: bool) {
     if debug_mode { println!{"@[NETWORK]>> Sent {:?}.", &network_buffer} }
-
     network.append(network_buffer);
-
     if debug_mode { println!{"@[NETWORK]>> Message history {:?}.", network} }
 }
