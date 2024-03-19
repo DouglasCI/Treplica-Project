@@ -1,7 +1,6 @@
 #![allow(dead_code, unused_assignments)] 
 
 use std::{
-    collections::VecDeque, 
     env, 
     fmt::Debug, 
     fs::File, 
@@ -200,10 +199,14 @@ fn main() {
     
     /* Loop to generate and send data to consumer. */
     for _ in 0..num_writes {
+        // (1) Start counting time spent doing the operations.
         let prod_clock = Instant::now();
+
         for _ in 0..buffer_size {
             tx_prod.send(producer(debug_mode)).unwrap();
         }
+
+        // (2) Discard the time spent in operations from the disk_delay.
         let wait_time = (disk_delay * ONE_MILLION).saturating_sub(prod_clock.elapsed().as_nanos());
         thread::sleep(Duration::from_nanos(wait_time as u64));
     }
@@ -343,87 +346,89 @@ fn flush_to_disk<T: Debug>(disk_buffer: &mut Vec<T>, disk: &mut Vec<T>, debug_mo
 fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Option<Vec<U>>>, 
         disk_delay: u128, msgs_per_interval: usize, debug_mode: bool) {
     // Structures
-    let mut network_buffers: VecDeque<Vec<U>> = VecDeque::new(); //queue for all message buffers
-    let mut buffer_to_be_sent: Vec<U> = vec![]; //buffer that will be sent in slices
     let mut network_history: Vec<U> = vec![]; //sent messages history
 
     // Control
     let mut clock = Instant::now();
     let mut send_interval: u128 = 0;
-    let mut num_sends: u128 = 0;
-    let mut shutdown = false;
+    let mut num_slices: u128 = 0;
 
     // Timestamps log
     let mut log_file = create_log_file("network");
 
     loop {
+        let mut buffer_to_be_sent: Vec<U> = vec![]; //buffer that will be sent in slices
+
         // Non-blocking receiver
-        match rx_net.try_recv() {
-            // Received data in this iteration!
+        match rx_net.recv() {
+            // Received data!
             Ok(messages) => match messages {
-                Some(m) => { network_buffers.push_back(m); },
-                None => { shutdown = true; }
-            }
-            Err(error) => match error {
-                // Did not receive any data in this iteration!
-                Empty => {},
-                // Channel disconnected!
-                Disconnected => {
-                    if !shutdown {
-                        println!("@[CONSUMER] #ERROR: Consumer network thread died!");
-                    }
+                Some(m) => { buffer_to_be_sent = m },
+                None => { 
+                    println!("@[CONSUMER] #SHUTDOWN: Finished work in network thread.");
+                    break;
                 }
+            }
+            // Channel disconnected!
+            Err(_) => {
+                println!("@[CONSUMER] #ERROR: Consumer network thread died!");
             }
         }
 
-        if shutdown && network_buffers.is_empty() && buffer_to_be_sent.is_empty() {
-            println!("@[CONSUMER] #SHUTDOWN: Finished work in network thread.");
-            break;
-        }
-        
-        // match network_buffers.pop_front() {
-        //     Some(b) => {
-        //         buffer_to_be_sent = b;
-        //     },
-        //     None => { continue; }
-        // }
-        // send_to_network(&mut buffer_to_be_sent, &mut network_history, debug_mode);
-        
-        // Send slices of the buffers.
-        let elapsed_time: u128 = clock.elapsed().as_nanos();
-        if elapsed_time >= send_interval {
-            let mut buffer_size = buffer_to_be_sent.len();
-            // Start sending the next buffer.
-            if num_sends == 0 {
-                match network_buffers.pop_front() {
-                    Some(b) => {
-                        buffer_to_be_sent = b;
-                    },
-                    None => { continue; }
-                }
+        let mut buffer_size = buffer_to_be_sent.len();
+        num_slices = ((buffer_size + msgs_per_interval - 1) / msgs_per_interval) as u128;
+        send_interval = ((disk_delay * 1/2) * ONE_MILLION) / num_slices as u128;
+
+        // Send slices of the buffer.
+        let mut i = 0;
+        while i < num_slices {
+            let elapsed_time: u128 = clock.elapsed().as_nanos();
+            if (i == 0) || (elapsed_time >= send_interval) {
+                clock = Instant::now(); //refresh clock
+
                 buffer_size = buffer_to_be_sent.len();
-                num_sends = ((buffer_size + (msgs_per_interval - 1)) / msgs_per_interval) as u128;
-                send_interval = ((disk_delay / 2) * ONE_MILLION) / num_sends as u128;
-            }
-            
-            if buffer_size > 0 {
-                // There might be N messages left in the buffer, where N < msgs_per_interval.
-                let split_index = std::cmp::min(msgs_per_interval, buffer_size);
-                let mut v = buffer_to_be_sent.split_off(split_index);
-                // Reference swap to retain pointers in the right variables.
-                let temp = buffer_to_be_sent;
-                buffer_to_be_sent = v;
-                v = temp;
+
+                // Calculate slice interval.
+                let slice_start: usize = (i as usize) * msgs_per_interval;
+                let mut slice_end: usize = slice_start + msgs_per_interval;
+
+                // Ensure that indices stay within buffer bounds when 
+                // buffer_size is not divisible by msgs_per_interval.
+                if slice_end > buffer_size { slice_end = buffer_size };
+                let mut v = (&buffer_to_be_sent[slice_start..slice_end]).to_vec();
 
                 write_to_log_file(&mut log_file, &v);
-
                 send_to_network(&mut v, &mut network_history, debug_mode);
-            
-                num_sends -= 1; //decrement number of sends left for this buffer
+                
+                i += 1;
             }
-
-            clock = Instant::now(); //refresh clock
         }
+
+        // // Send slices of the buffers.
+        // let buffer_size = buffer_to_be_sent.len();
+        // num_slices = ((buffer_size + msgs_per_interval - 1) / msgs_per_interval) as u128;
+        // send_interval = ((disk_delay * 1/2) * ONE_MILLION) / num_slices as u128;
+
+        // for slice_index in 0..num_slices {
+        //     // (1) Start counting time spent doing the operations.
+        //     let clock = Instant::now();
+            
+        //     // Calculate slice interval.
+        //     let slice_start: usize = (slice_index as usize) * msgs_per_interval;
+        //     let mut slice_end: usize = slice_start + msgs_per_interval;
+
+        //     // There might be N messages left in the buffer, where N < msgs_per_interval.
+        //     if slice_end > buffer_size { slice_end = buffer_size };
+        //     let mut v = (&buffer_to_be_sent[slice_start..slice_end]).to_vec();
+
+        //     write_to_log_file(&mut log_file, &v);
+        //     send_to_network(&mut v, &mut network_history, debug_mode);
+
+        //     // (2) Discard the time spent in operations from the send_interval.
+        //     let elapsed = clock.elapsed().as_nanos();
+        //     let wait_time = (send_interval).saturating_sub(elapsed);
+        //     thread::sleep(Duration::from_nanos(wait_time as u64));
+        // }
     }
 }
 
