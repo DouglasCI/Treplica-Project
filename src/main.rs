@@ -377,7 +377,7 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Option<Vec<U>>>,
 
         let mut buffer_size = buffer_to_be_sent.len();
         num_slices = ((buffer_size + msgs_per_interval - 1) / msgs_per_interval) as u128;
-        send_interval = ((disk_delay * 3/4) * ONE_MILLION) / num_slices as u128;
+        send_interval = ((disk_delay * 1/2) * ONE_MILLION) / num_slices as u128;
 
         // Send slices of the buffer.
         let mut i = 0;
