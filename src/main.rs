@@ -403,32 +403,6 @@ fn consumer_network<U: Clone + Debug>(rx_net: mpsc::Receiver<Option<Vec<U>>>,
                 i += 1;
             }
         }
-
-        // // Send slices of the buffers.
-        // let buffer_size = buffer_to_be_sent.len();
-        // num_slices = ((buffer_size + msgs_per_interval - 1) / msgs_per_interval) as u128;
-        // send_interval = ((disk_delay * 1/2) * ONE_MILLION) / num_slices as u128;
-
-        // for slice_index in 0..num_slices {
-        //     // (1) Start counting time spent doing the operations.
-        //     let clock = Instant::now();
-            
-        //     // Calculate slice interval.
-        //     let slice_start: usize = (slice_index as usize) * msgs_per_interval;
-        //     let mut slice_end: usize = slice_start + msgs_per_interval;
-
-        //     // There might be N messages left in the buffer, where N < msgs_per_interval.
-        //     if slice_end > buffer_size { slice_end = buffer_size };
-        //     let mut v = (&buffer_to_be_sent[slice_start..slice_end]).to_vec();
-
-        //     write_to_log_file(&mut log_file, &v);
-        //     send_to_network(&mut v, &mut network_history, debug_mode);
-
-        //     // (2) Discard the time spent in operations from the send_interval.
-        //     let elapsed = clock.elapsed().as_nanos();
-        //     let wait_time = (send_interval).saturating_sub(elapsed);
-        //     thread::sleep(Duration::from_nanos(wait_time as u64));
-        // }
     }
 }
 
